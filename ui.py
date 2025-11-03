@@ -1,80 +1,105 @@
 import streamlit as st
 import requests
 import json
+import os
 
-
-API_URL = "http://127.0.0.1:5001/ask" # URL Flask API
-
-
-
-
-def query_api(question):
-    """Отправляет вопрос на API и возвращает ответ."""
+# --- (Все функции для API остаются без изменений) ---
+API_BASE_URL = "http://127.0.0.1:5001"
+def get_documents():
     try:
-        payload = {"question": question}
-        headers = {"Content-Type": "application/json"}
-        response = requests.post(API_URL, data=json.dumps(payload), headers=headers)
-        
-        # Проверяем, успешен ли запрос
-        if response.status_code == 200:
-            return response.json()
-        else:
-            # Возвращаем информацию об ошибке, если что-то пошло не так
-            return {"error": f"Ошибка сервера: {response.status_code}", "details": response.text}
-    except requests.exceptions.ConnectionError:
-        return {"error": "Не удалось подключиться к API. Убедитесь, что сервер app.py запущен."}
-    except Exception as e:
-        return {"error": f"Произошла непредвиденная ошибка: {e}"}
+        response = requests.get(f"{API_BASE_URL}/documents")
+        if response.status_code == 200: return response.json()
+    except: pass
+    return None
+def upload_document(file):
+    try:
+        files = {'file': (file.name, file.getvalue(), file.type)}
+        response = requests.post(f"{API_BASE_URL}/upload", files=files)
+        return response.json()
+    except: return {"error": "Не удалось подключиться к API."}
+def delete_document(filename):
+    try:
+        response = requests.delete(f"{API_BASE_URL}/documents/{filename}")
+        return response.json()
+    except: return {"error": "Не удалось подключиться к API."}
+def rebuild_index():
+    try:
+        response = requests.post(f"{API_BASE_URL}/rebuild")
+        return response.json()
+    except: return {"error": "Не удалось подключиться к API."}
+def query_api(question):
+    try:
+        response = requests.post(f"{API_BASE_URL}/ask", json={"question": question})
+        if response.status_code == 200: return response.json()
+        return {"error": f"Ошибка сервера: {response.status_code}", "details": response.text}
+    except: return {"error": "Не удалось подключиться к API."}
 
 
+# --- (Основная структура приложения - без изменений) ---
+st.set_page_config(page_title="CorpScribe AI", page_icon="🤖", layout="wide")
+with st.sidebar:
+    st.title("Панель Управления")
+    page = st.radio("Выберите страницу", ["Чат с Ассистентом", "Управление Базой Знаний"])
+    api_status = get_documents()
+    if api_status is not None: st.success("✅ API-сервер доступен")
+    else: st.error("❌ API-сервер недоступен!")
 
-# 1. Заголовок страницы
-st.set_page_config(page_title="CorpScribe AI", page_icon="🤖")
-st.title("🤖 CorpScribe AI")
-st.caption("Ваш умный ассистент по корпоративной базе знаний")
-
-# 2. Инициализация истории чата в сессии
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# 3. Отображение сообщений из истории
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# 4. Поле для ввода нового сообщения
-if prompt := st.chat_input("Задайте ваш вопрос по документам..."):
-    # Добавляем сообщение пользователя в историю и отображаем его
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    # Получаем ответ от ассистента и отображаем его
-    with st.chat_message("assistant"):
-        # Показываем "индикатор загрузки" пока ждем ответ
-        with st.spinner("Думаю..."):
-            api_response = query_api(prompt)
-
-            if "error" in api_response:
-                # Если API вернул ошибку, показываем ее
-                response_text = f"Произошла ошибка: {api_response['error']}"
-                if 'details' in api_response:
-                    response_text += f"\n\nДетали: `{api_response['details']}`"
-            else:
-                # Если все хорошо, форматируем и показываем ответ
-                answer = api_response.get("answer", "Не удалось получить ответ.")
-                sources = api_response.get("sources", [])
-                
-                response_text = answer
+# --- (Страница чата - без изменений) ---
+if page == "Чат с Ассистентом":
+    st.title("🤖 CorpScribe AI")
+    # ... (весь код чата остается тем же)
+    if "messages" not in st.session_state: st.session_state.messages = []
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]): st.markdown(message["content"])
+    if prompt := st.chat_input("Задайте ваш вопрос..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"): st.markdown(prompt)
+        with st.chat_message("assistant"):
+            with st.spinner("Думаю..."):
+                response_data = query_api(prompt)
+                answer = response_data.get("answer", "Произошла ошибка.")
+                st.markdown(answer)
+                sources = response_data.get("sources", [])
                 if sources:
-                    response_text += "\n\n**Источники:**\n"
-                    for i, source in enumerate(sources, 1):
-                        source_info = source.get('source', 'Неизвестно')
-                        # Мы используем st.expander, чтобы источники не загромождали чат
-                        with st.expander(f"Источник {i}: {source_info}"):
-                            st.write(source.get('content_preview', 'Нет предпросмотра.'))
-            
-            st.markdown(response_text)
+                    with st.expander("Показать источники"):
+                        for source in sources: st.info(f"Источник: {source['source']}\n\n>{source['content_preview']}")
+        st.session_state.messages.append({"role": "assistant", "content": answer})
 
-    # Добавляем ответ ассистента в историю
-    st.session_state.messages.append({"role": "assistant", "content": response_text})
+elif page == "Управление Базой Знаний":
+    st.title("🗂️ Управление Базой Знаний")
+    # ... (блок переиндексации без изменений)
+    st.subheader("Пересобрать Базу Знаний")
+    if st.button("🚀 Запустить пересборку"):
+        with st.spinner("Пересобираю базу знаний..."):
+            result = rebuild_index()
+            st.success(result.get('message', 'Готово!'))
+    st.divider()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Загрузить новый документ")
+        uploaded_file = st.file_uploader("Выберите .txt или .pdf файл", type=['txt', 'pdf'])
+        
+        # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Добавили кнопку для подтверждения загрузки ---
+        if st.button("📤 Загрузить файл", disabled=(uploaded_file is None)):
+            if uploaded_file is not None:
+                with st.spinner("Загружаю файл..."):
+                    result = upload_document(uploaded_file)
+                    if "error" in result:
+                        st.error(f"Ошибка: {result['error']}")
+                    else:
+                        st.success(result.get('message', 'Файл загружен!'))
+                        st.info("Не забудьте пересобрать базу.")
+                        st.rerun() # Обновляем страницу, чтобы показать новый файл
+            else:
+                st.warning("Пожалуйста, сначала выберите файл.")
+    
+    with col2:
+        st.subheader("Текущие документы")
+        documents = get_documents()
+        if documents:
+            for doc in documents:
+                sub_col1, sub_col2 = st.columns([0.8, 0.2])
+                sub_col1.text(doc)
+                if sub_col2.button("🗑️", key=f"del_{doc}"):
+                    delete_document(doc)
+                    st.rerun()
