@@ -1,7 +1,5 @@
 from flask import Flask, request, jsonify
-from langchain_community.llms import Ollama
 from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import OllamaEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 import logging
@@ -9,7 +7,11 @@ import os
 import shutil
 from typing import Any
 
-# <<< НОВЫЙ ИМПОРТ: Умный загрузчик >>>
+# --- НОВЫЕ ИМПОРТЫ ---
+from langchain_deepseek import ChatDeepSeek
+from langchain_openai import OpenAIEmbeddings # Используем для OpenAI-совместимых эмбеддингов
+
+# --- Старые импорты для RAG ---
 from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
@@ -19,25 +21,31 @@ from pydantic import Field
 
 # --- НАСТРОЙКИ ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-PC_IP_ADDRESS = "http://192.168.0.15:11434" # <-- УБЕДИСЬ, ЧТО ЗДЕСЬ ТВОЙ IP
 DATA_PATH = "./docs"
 DB_PATH = "./chroma_db"
-MODEL_NAME = "mistral"
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+LLM_MODEL_NAME = "deepseek-coder" # Эта модель будет использоваться и для чата, и для эмбеддингов
 # --- КОНЕЦ НАСТРОЕК ---
 
 app = Flask(__name__)
 qa_chain = None
 
-# --- ЛОГИКА ИНДЕКСАЦИИ ---
+# --- ЛОГИКА ИНДЕКСАЦИИ (полностью на DeepSeek) ---
 def create_vector_db():
-    global qa_chain; qa_chain = None
-    if os.path.exists(DB_PATH): shutil.rmtree(DB_PATH)
+    global qa_chain
+    qa_chain = None
+    logging.info("Начинаю полную переиндексацию базы знаний с помощью DeepSeek...")
+    
+    if os.path.exists(DB_PATH):
+        shutil.rmtree(DB_PATH)
+
     if not os.path.exists(DATA_PATH) or not os.listdir(DATA_PATH):
-         if not os.path.exists(DATA_PATH): os.makedirs(DATA_PATH)
+         logging.warning("Папка 'docs' пуста. Векторная база не будет создана.")
+         if not os.path.exists(DATA_PATH):
+             os.makedirs(DATA_PATH)
          return False
 
     all_docs = []
-    # <<< ИЗМЕНЕНИЕ: Используем умный UnstructuredFileLoader для каждого файла >>>
     for filename in os.listdir(DATA_PATH):
         file_path = os.path.join(DATA_PATH, filename)
         if os.path.isfile(file_path):
@@ -46,25 +54,52 @@ def create_vector_db():
                 all_docs.extend(loader.load())
             except Exception as e:
                 logging.error(f"Ошибка загрузки файла {filename}: {e}")
+    
+    if not all_docs:
+        logging.warning("Не удалось загрузить ни одного документа.")
+        return False
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
     texts = text_splitter.split_documents(all_docs)
-    embeddings = OllamaEmbeddings(model=MODEL_NAME, base_url=PC_IP_ADDRESS)
+    logging.info(f"Документы нарезаны на {len(texts)} чанков.")
+
+    # <<< ЗАМЕНА OLLAMA НА DEEPSEEK ДЛЯ ЭМБЕДДИНГОВ >>>
+    logging.info("Создание эмбеддингов через DeepSeek API...")
+    if not DEEPSEEK_API_KEY:
+        raise ValueError("DEEPSEEK_API_KEY не найден для создания эмбеддингов!")
+        
+    embeddings = OpenAIEmbeddings(
+        model=LLM_MODEL_NAME,
+        api_key=DEEPSEEK_API_KEY,
+        base_url="https://api.deepseek.com/v1"
+    )
+    
     vectorstore = Chroma.from_documents(documents=texts, embedding=embeddings, persist_directory=DB_PATH)
     vectorstore.persist()
+    logging.info(f"✅ Векторная база успешно пересоздана. Всего векторов: {vectorstore._collection.count()}")
     return True
 
-# --- ИНИЦИАЛИЗАЦИЯ RAG (без изменений) ---
+# --- ИНИЦИАЛИЗАЦИЯ RAG (полностью на DeepSeek) ---
 def initialize_rag_chain():
-    # ... (весь этот блок остается без изменений)
     global qa_chain
     if qa_chain is not None: return
-    logging.info("Инициализация RAG-цепочки с Ре-ранкером...")
-    llm = Ollama(base_url=PC_IP_ADDRESS, model=MODEL_NAME)
-    embeddings = OllamaEmbeddings(model=MODEL_NAME, base_url=PC_IP_ADDRESS)
+    logging.info("Инициализация RAG-цепочки с DeepSeek и Ре-ранкером...")
+    
+    if not DEEPSEEK_API_KEY:
+        raise ValueError("DEEPSEEK_API_KEY не найден!")
+    
+    llm = ChatDeepSeek(model=LLM_MODEL_NAME, api_key=DEEPSEEK_API_KEY)
+    
+    embeddings = OpenAIEmbeddings(
+        model=LLM_MODEL_NAME,
+        api_key=DEEPSEEK_API_KEY,
+        base_url="https://api.deepseek.com/v1"
+    )
+    
     if not os.path.exists(DB_PATH): return
     vectorstore = Chroma(persist_directory=DB_PATH, embedding_function=embeddings)
     base_retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={'k': 20})
+    
     class FlashRankReranker(BaseDocumentCompressor):
         ranker: Any = Field(default_factory=lambda: Ranker(model_name="ms-marco-MiniLM-L-12-v2", cache_dir="./flashrank_models"))
         def compress_documents(self, documents, query, **kwargs):
@@ -74,14 +109,15 @@ def initialize_rag_chain():
             final_docs = []
             for r in rerank_result[:3]: final_docs.append(documents[r['id']])
             return final_docs
+
     compression_retriever = ContextualCompressionRetriever(base_compressor=FlashRankReranker(), base_retriever=base_retriever)
-    template = """Ты — умный ассистент. Отвечай ИСКЛЮЧИТЕЛЬНО на основе контекста. Если ответа нет, скажи, что не можешь ответить. Контекст: {context} Вопрос: {question} Ответ:"""
+    
+    template = """Ты — умный и вежливый ассистент. Отвечай на вопросы ИСКЛЮЧИТЕЛЬНО на основе предоставленного контекста. Если ответа нет, вежливо скажи, что не можешь ответить на основе имеющихся данных. Не придумывай ничего от себя. Контекст: {context} Вопрос: {question} Ответ:"""
     prompt = PromptTemplate.from_template(template)
     qa_chain = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=compression_retriever, return_source_documents=True, chain_type_kwargs={"prompt": prompt})
-    logging.info("✅ RAG-цепочка с Ре-ранкером успешно инициализирована!")
+    logging.info("✅ RAG-цепочка успешно инициализирована!")
 
 # --- ЭНДПОИНТЫ (без изменений) ---
-# ... (все эндпоинты остаются без изменений)
 @app.route('/documents', methods=['GET'])
 def list_documents():
     if not os.path.exists(DATA_PATH): os.makedirs(DATA_PATH)
@@ -98,11 +134,15 @@ def delete_document(filename):
     return jsonify({"message": f"Файл '{filename}' удален."})
 @app.route('/rebuild', methods=['POST'])
 def rebuild_index():
-    create_vector_db()
-    return jsonify({"message": "Процесс пересоздания базы знаний запущен."})
+    try:
+        create_vector_db()
+        return jsonify({"message": "Процесс пересоздания базы знаний запущен."})
+    except Exception as e:
+        logging.error(f"Ошибка при пересоздании базы: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 @app.route('/ask', methods=['POST'])
 def ask_question():
-    if not os.path.exists(DB_PATH): return jsonify({"answer": "База знаний еще не создана.", "sources": []})
+    if not os.path.exists(DB_PATH): return jsonify({"answer": "База знаний еще не создана. Пожалуйста, загрузите документы и пересоберите базу в панели управления.", "sources": []})
     if qa_chain is None: initialize_rag_chain()
     question = request.get_json().get('question')
     result = qa_chain({"query": question})

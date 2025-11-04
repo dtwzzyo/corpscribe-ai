@@ -6,6 +6,8 @@ FROM python:3.9-slim
 # Все последующие команды будут выполняться в /app.
 WORKDIR /app
 
+ENV DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY
+
 # Шаг 3: Копируем "список запчастей" в контейнер.
 # Копируем сначала только его для оптимизации кеширования слоев Docker. Про-фишка!
 COPY requirements.txt .
