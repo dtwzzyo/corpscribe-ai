@@ -8,7 +8,6 @@ langchain-community
 langchain-deepseek
 langchain-openai
 chromadb
-ollama # Оставим на всякий случай, если понадобится
 
 # Document Parsing
 unstructured[local-inference]
