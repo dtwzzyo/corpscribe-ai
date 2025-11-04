@@ -1,0 +1,16 @@
+name: Debug Workflow Resolution
+
+on:
+  push:
+    branches:
+      - "main"
+
+jobs:
+  hello-world-test:
+    name: Test External Action
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run a simple, official GitHub Action
+        uses: actions/hello-world-javascript-action@v1
+        with:
+          who-to-greet: 'Mona the Octocat'
