@@ -150,4 +150,5 @@ def ask_question():
     return jsonify({"answer": result.get("result", "Нет ответа."), "sources": sources})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    # Оставляем это для локального тестирования, если понадобится
+    app.run(host='0.0.0.0', port=5001)

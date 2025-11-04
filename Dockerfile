@@ -21,9 +21,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Шаг 6: Копируем весь код приложения
 COPY . .
 
-# Шаг 7: Открываем порты
-EXPOSE 5001
-EXPOSE 8501
+# Шаг 7: Устанавливаем Gunicorn
+RUN pip install gunicorn
 
-# Шаг 8: Запускаем приложение
-CMD ["/bin/bash", "-c", "python app.py & streamlit run ui.py --server.port 8501 --server.address 0.0.0.0"]
+# Шаг 8: Запускаем приложение через Gunicorn и Streamlit
+# Gunicorn запускает 4 "рабочих" для нашего Flask API.
+# Streamlit запускается с отключенным "наблюдателем", чтобы избежать inotify ошибок.
+CMD ["/bin/bash", "-c", "gunicorn --bind 0.0.0.0:5001 --workers 4 app:app & streamlit run ui.py --server.port 8501 --server.address 0.0.0.0 --server.fileWatcherType none"]
