@@ -1,5 +1,6 @@
 # Шаг 1: Берем "мощный" базовый образ с уже установленным Python и PyTorch
-FROM pytorch/pytorch:2.3.1-cpu-py3.9
+# <<< ИСПРАВЛЕНИЕ: py3.9 -> py39 >>>
+FROM pytorch/pytorch:2.3.1-cpu-py39
 
 # Шаг 2: Устанавливаем рабочую директорию
 WORKDIR /app
@@ -8,7 +9,6 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Шаг 4: Устанавливаем НАШИ библиотеки.
-# PyTorch уже есть, так что pip установит только то, чего не хватает. Это гораздо быстрее и легче.
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Шаг 5: Копируем весь остальной код
