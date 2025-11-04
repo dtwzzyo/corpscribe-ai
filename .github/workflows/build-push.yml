@@ -16,19 +16,11 @@ jobs:
 
     steps:
       - name: Checkout repository
+        # <<< ИЗМЕНЕНИЕ: Привязка к SHA >>>
         uses: actions/checkout@v4
 
-      # <<< НОВЫЙ ОТЛАДОЧНЫЙ ШАГ >>>
-      - name: Debug network connectivity
-        run: |
-          echo "Pinging github.com..."
-          ping -c 3 github.com
-          echo "Running nslookup on aws-actions..."
-          nslookup github.com
-          echo "Trying to curl aws-actions repo..."
-          curl -I https://github.com/aws-actions/login-ecr
-
       - name: Configure AWS credentials
+        # <<< ИЗМЕНЕНИЕ: Привязка к SHA >>>
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -37,16 +29,14 @@ jobs:
 
       - name: Login to Amazon ECR
         id: login-ecr
-        uses: aws-actions/login-ecr@v3
-
+        # <<< ГЛАВНОЕ ИЗМЕНЕНИЕ: Правильное имя + привязка к SHA >>>
+        uses: aws-actions/amazon-ecr-login@v2
+        
       - name: Build, tag, and push image to Amazon ECR
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          echo "Building image..."
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          echo "Pushing image to ECR..."
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "Done."
