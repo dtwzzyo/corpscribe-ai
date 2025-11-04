@@ -5,9 +5,6 @@ FROM python:3.9
 WORKDIR /app
 
 # Шаг 3: Устанавливаем "тяжеловесов" отдельной командой.
-# Мы указываем --no-cache-dir, чтобы не засорять образ, и --prefer-binary, чтобы по возможности
-# использовать готовые "колеса", а не компилировать с нуля.
-# Также указываем URL для скачивания, чтобы pip не тратил время на поиск.
 RUN pip install --no-cache-dir --prefer-binary \
     torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 \
     --index-url https://download.pytorch.org/whl/cpu
@@ -15,16 +12,28 @@ RUN pip install --no-cache-dir --prefer-binary \
 # Шаг 4: Копируем наш список остальных зависимостей
 COPY requirements.txt .
 
-# Шаг 5: Устанавливаем все остальное. Это пройдет быстро, т.к. torch уже на месте.
+# Шаг 5: Устанавливаем все остальное.
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Шаг 6: Копируем весь код приложения
 COPY . .
 
-# Шаг 7: Устанавливаем Gunicorn
+# Шаг 7: Устанавливаем Gunicorn (наш production-сервер для Flask)
 RUN pip install gunicorn
 
-# Шаг 8: Запускаем приложение через Gunicorn и Streamlit
-# Gunicorn запускает 4 "рабочих" для нашего Flask API.
-# Streamlit запускается с отключенным "наблюдателем", чтобы избежать inotify ошибок.
-CMD ["/bin/bash", "-c", "gunicorn --bind 0.0.0.0:5001 --workers 4 app:app & streamlit run ui.py --server.port 8501 --server.address 0.0.0.0 --server.fileWatcherType none"]
+# Шаг 8: Открываем порты
+EXPOSE 5001
+EXPOSE 8501
+
+# Шаг 9: <<< ГЛАВНОЕ ИЗМЕНЕНИЕ: Поочередный запуск >>>
+# Создаем маленький скрипт-запускатор
+RUN echo '#!/bin/bash' > /app/start.sh && \
+    echo 'echo "Starting Gunicorn (Flask API)..."' >> /app/start.sh && \
+    echo 'gunicorn --bind 0.0.0.0:5001 --workers 2 app:app &' >> /app/start.sh && \
+    echo 'sleep 10' >> /app/start.sh && \
+    echo 'echo "Starting Streamlit UI..."' >> /app/start.sh && \
+    echo 'streamlit run ui.py --server.port 8501 --server.address 0.0.0.0 --server.fileWatcherType none' >> /app/start.sh && \
+    chmod +x /app/start.sh
+
+# Запускаем наш скрипт
+CMD ["/app/start.sh"]
